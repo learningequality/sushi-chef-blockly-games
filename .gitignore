@@ -99,3 +99,13 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# Ricecooker specific
+.webcache/
+storage/
+restore/
+.ricecookerfilecache
+
+node_modules/
+screenshot.png
+secrets.py
