@@ -90,7 +90,6 @@ class ThreeAsafeerChef(SushiChef):
             language = "en",
         )
 
-        #download_all(channel)
         download_all_languages(channel)
         return channel
 
@@ -124,6 +123,8 @@ def download_all_languages(channel):
 
 
 def download_language(topic_node, language_code):
+    print('Downloading language', language_code)
+
     puzzles = []
     descriptions = []
 
@@ -140,8 +141,8 @@ def download_language(topic_node, language_code):
             # from the JSON file
             if puzzle_url == 'pond-duck':
                 github_url = 'https://raw.githubusercontent.com/google/blockly-games/master/json/%s.json' % language_code.lower()
-                response = make_request(github_url)
-                title = response.json()['Games.pond']
+                response_json = make_request(github_url).json()
+                title = response_json.get('Games.pond', 'Pond')
 
             puzzles.append((title, thumbnail, puzzle_href))
 
@@ -151,18 +152,18 @@ def download_language(topic_node, language_code):
 
     for (title, thumbnail, puzzle_href), description in zip(puzzles, descriptions):
         print('Downloading %s: %s from url https://blockly-games.appspot.com/%s' % (title, description, puzzle_href))
-        topic_node.add_child(download_single(puzzle_href, title, description, thumbnail))
+        topic_node.add_child(download_single(puzzle_href, title, description, thumbnail, language_code))
 
 
-def download_single(puzzle_url, title, description, thumbnail):
+def download_single(puzzle_url, title, description, thumbnail, language_code):
     """Download the book at index i."""
     with WebDriver("https://blockly-games.appspot.com/%s" % puzzle_url, delay=1000) as driver:
 
         doc = BeautifulSoup(driver.page_source, "html.parser")
-        return process_node_from_doc(doc, puzzle_url, title, description, thumbnail)
+        return process_node_from_doc(doc, puzzle_url, title, description, thumbnail, language_code)
 
 
-def process_node_from_doc(doc, book_id, title, description, thumbnail):
+def process_node_from_doc(doc, book_id, title, description, thumbnail, language_code):
     """Extract a Ricecooker node given the HTML source and some metadata."""
     # Create a temporary folder to download all the files for a book.
     destination = tempfile.mkdtemp()
@@ -222,10 +223,10 @@ def process_node_from_doc(doc, book_id, title, description, thumbnail):
         source_id=book_id,
         title=truncate_metadata(title),
         description=description,
-        license=licenses.PublicDomainLicense(copyright_holder='3asafeer.com'),
+        license=licenses.PublicDomainLicense(copyright_holder='Google'),
         thumbnail=thumbnail,
         files=[files.HTMLZipFile(zip_path)],
-        language="en",
+        language=language_code,
     )
 
 
