@@ -95,40 +95,46 @@ class ThreeAsafeerChef(SushiChef):
 
 
 def download_all_languages(channel):
+    languages = []
+
+    # Fetch all language information
     with WebDriver("https://blockly-games.appspot.com", delay=1000) as driver:
         for option in driver.find_elements_by_css_selector('#languageMenu option'):
-            language_code = option.get_attribute('value')
+            blockly_language_code = option.get_attribute('value')
             language_title = option.text
-            le_language_code = language_code
+            le_language_code = blockly_language_code
 
             # TODO(davidhu): Add these language codes and special cases to
             # le-utils
-            if language_code in ['hrx', 'pms', 'sco', 'be-tarask']:
+            if le_language_code in ['hrx', 'pms', 'sco', 'be-tarask']:
                 continue
 
-            if language_code == 'pt-br':
+            if le_language_code == 'pt-br':
                 le_language_code = 'pt-BR'
-            elif language_code == 'zh-hant':
+            elif le_language_code == 'zh-hant':
                 le_language_code = 'zh-TW'
-            elif language_code == 'zh-hans':
+            elif le_language_code == 'zh-hans':
                 le_language_code = 'zh-CN'
 
             topic = nodes.TopicNode(
-                source_id=language_code,
+                source_id=le_language_code,
                 title=language_title,
                 language=le_language_code,
             )
-            download_language(topic, language_code)
-            channel.add_child(topic)
+            languages.append((topic, blockly_language_code, le_language_code))
+
+    for topic, blockly_language_code, le_language_code in languages:
+        print('Downloading language %s (on Blockly this is %s)' % (le_language_code, blockly_language_code))
+        download_language(topic, blockly_language_code, le_language_code)
+        channel.add_child(topic)
 
 
-def download_language(topic_node, language_code):
-    print('Downloading language', language_code)
-
+def download_language(topic_node, blockly_language_code, le_language_code):
     puzzles = []
     descriptions = []
 
-    with WebDriver("https://blockly-games.appspot.com/?lang=%s" % language_code, delay=1000) as driver:
+    # Fetch all puzzle information
+    with WebDriver("https://blockly-games.appspot.com/?lang=%s" % blockly_language_code, delay=1000) as driver:
         for i, icon in enumerate(driver.find_elements_by_css_selector('.icon')):
 
             title = icon.find_element_by_css_selector('text').text
@@ -140,31 +146,27 @@ def download_language(topic_node, language_code):
             # For some reason title can't be found in the last case, so grab it
             # from the JSON file
             if puzzle_url == 'pond-duck':
-                github_url = 'https://raw.githubusercontent.com/google/blockly-games/master/json/%s.json' % language_code.lower()
+                github_url = 'https://raw.githubusercontent.com/google/blockly-games/master/json/%s.json' % blockly_language_code.lower()
                 response_json = make_request(github_url).json()
                 title = response_json.get('Games.pond', 'Pond')
 
             puzzles.append((title, thumbnail, puzzle_href))
 
-        driver.get('https://blockly-games.appspot.com/about?lang=%s' % language_code)
+        driver.get('https://blockly-games.appspot.com/about?lang=%s' % blockly_language_code)
         for tr in driver.find_elements_by_css_selector('table tr'):
             descriptions.append(tr.text)
 
     for (title, thumbnail, puzzle_href), description in zip(puzzles, descriptions):
-        print('Downloading %s: %s from url https://blockly-games.appspot.com/%s' % (title, description, puzzle_href))
-        topic_node.add_child(download_single(puzzle_href, title, description, thumbnail, language_code))
+        print('Downloading puzzle "%s": %s from url https://blockly-games.appspot.com/%s' % (title, description, puzzle_href))
+        topic_node.add_child(download_single(puzzle_href, title, description, thumbnail, le_language_code))
 
 
-def download_single(puzzle_url, title, description, thumbnail, language_code):
+def download_single(puzzle_url, title, description, thumbnail, le_language_code):
     """Download the book at index i."""
-    with WebDriver("https://blockly-games.appspot.com/%s" % puzzle_url, delay=1000) as driver:
-
-        doc = BeautifulSoup(driver.page_source, "html.parser")
-        return process_node_from_doc(doc, puzzle_url, title, description, thumbnail, language_code)
-
-
-def process_node_from_doc(doc, book_id, title, description, thumbnail, language_code):
     """Extract a Ricecooker node given the HTML source and some metadata."""
+    with WebDriver("https://blockly-games.appspot.com/%s" % puzzle_url, delay=1000) as driver:
+        doc = BeautifulSoup(driver.page_source, "html.parser")
+
     # Create a temporary folder to download all the files for a book.
     destination = tempfile.mkdtemp()
 
@@ -178,7 +180,7 @@ def process_node_from_doc(doc, book_id, title, description, thumbnail, language_
             request_fn=make_request, filename='compiled.js')
 
     # Download files from GitHub.
-    dir_name = book_id.split('?')[0]
+    dir_name = puzzle_url.split('?')[0]
     if dir_name == 'pond-tutor' or dir_name == 'pond-duck':
         dir_name = 'pond'
 
@@ -214,19 +216,19 @@ def process_node_from_doc(doc, book_id, title, description, thumbnail, language_
     with open(os.path.join(destination, "index.html"), "w") as f:
         f.write(str(doc))
 
-    print("Downloaded book %s titled \"%s\" (thumbnail %s) to destination %s" % (
-        book_id, title, thumbnail, destination))
+    print("Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
+        puzzle_url, title, thumbnail, destination))
     #preview_in_browser(destination)
 
     zip_path = create_predictable_zip(destination)
     return nodes.HTML5AppNode(
-        source_id=book_id,
+        source_id=puzzle_url,
         title=truncate_metadata(title),
         description=description,
         license=licenses.PublicDomainLicense(copyright_holder='Google'),
         thumbnail=thumbnail,
         files=[files.HTMLZipFile(zip_path)],
-        language=language_code,
+        language=le_language_code,
     )
 
 
@@ -245,7 +247,7 @@ def download_assets_from_github(repo_name, repo_path, destination):
         if item['type'] == 'file':
             filename = item['name']
             download_url = item['download_url']
-            print('Downloading file %s to %s from url %s' % (filename, destination, download_url))
+            print('Downloading %s' % download_url)
             download_file(download_url, destination, request_fn=make_request,
                     filename=filename)
 
