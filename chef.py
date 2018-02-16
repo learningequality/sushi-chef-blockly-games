@@ -4,6 +4,11 @@
 Sushi Chef for https://blockly-games.appspot.com
 Learn programming using drag-and-drop blocks.
 We make HTML5 apps out of the 7 games.
+
+Note: There are actually offline archives available here:
+https://github.com/google/blockly-games/wiki/Offline
+However these are missing some icons and sounds.
+(Also this chef was written before I found out about those!)
 """
 
 from collections import defaultdict
@@ -52,6 +57,7 @@ forever_adapter = CacheControlAdapter(heuristic=CacheForeverHeuristic(), cache=c
 sess.mount('https://blockly-games.appspot.com', forever_adapter)
 sess.mount('http://fonts.googleapis.com', forever_adapter)
 sess.mount('https://raw.githubusercontent.com', forever_adapter)
+sess.mount('https://api.github.com', forever_adapter)
 
 
 headers = {
@@ -61,7 +67,7 @@ headers = {
 }
 
 
-class ThreeAsafeerChef(SushiChef):
+class BlocklyGamesChef(SushiChef):
     """
     The chef class that takes care of uploading channel to the content curation server.
 
@@ -95,20 +101,24 @@ class ThreeAsafeerChef(SushiChef):
 
 
 def download_all_languages(channel):
+    """Download all available languages from Blockly."""
     languages = []
 
-    # Fetch all language information
     with WebDriver("https://blockly-games.appspot.com", delay=1000) as driver:
         for option in driver.find_elements_by_css_selector('#languageMenu option'):
             blockly_language_code = option.get_attribute('value')
             language_title = option.text
             le_language_code = blockly_language_code
 
-            # TODO(davidhu): Add these language codes and special cases to
-            # le-utils
+            # There are some obscure languages that Blockly supports that we
+            # don't yet know about in le-utils. Skip those for now.
+            # TODO(davidhu): Add these language codes to le-utils
             if le_language_code in ['hrx', 'pms', 'sco', 'be-tarask']:
                 continue
 
+            # ... and sometimes we do know about the language but our language
+            # code is different than Blockly's.
+            # TODO(davidhu): Add these special cases to le-utils
             if le_language_code == 'pt-br':
                 le_language_code = 'pt-BR'
             elif le_language_code == 'zh-hant':
@@ -124,63 +134,95 @@ def download_all_languages(channel):
             languages.append((topic, blockly_language_code, le_language_code))
 
     for topic, blockly_language_code, le_language_code in languages:
-        print('Downloading language %s (on Blockly this is %s)' % (le_language_code, blockly_language_code))
-        download_language(topic, blockly_language_code, le_language_code)
+        print('Downloading puzzles for language %s (from https://blockly-games.appspot.com/?lang=%s)' % (
+            topic.title, blockly_language_code))
+        download_puzzles_for_language(topic, blockly_language_code, le_language_code)
         channel.add_child(topic)
 
 
-def download_language(topic_node, blockly_language_code, le_language_code):
+def download_puzzles_for_language(topic_node, blockly_language_code, le_language_code):
+    """Download all puzzles given for a given language."""
     puzzles = []
     descriptions = []
 
-    # Fetch all puzzle information
     with WebDriver("https://blockly-games.appspot.com/?lang=%s" % blockly_language_code, delay=1000) as driver:
+        # Fetch puzzle metadata
         for i, icon in enumerate(driver.find_elements_by_css_selector('.icon')):
-
             title = icon.find_element_by_css_selector('text').text
             image_src = icon.find_element_by_css_selector('image').get_attribute('xlink:href')
             thumbnail = make_fully_qualified_url(image_src)
-            puzzle_href = icon.find_element_by_css_selector('a').get_attribute('xlink:href')
-            puzzle_url = puzzle_href.split('?')[0]
+            puzzle_url = icon.find_element_by_css_selector('a').get_attribute('xlink:href')
 
-            # For some reason title can't be found in the last case, so grab it
-            # from the JSON file
-            if puzzle_url == 'pond-duck':
-                github_url = 'https://raw.githubusercontent.com/google/blockly-games/master/json/%s.json' % blockly_language_code.lower()
+            # For some reason Selenium always gives us an empty string for the
+            # title of the last puzzle, even though it's there in the HTML, so
+            # we're just going to grab it from the translations JSON file on
+            # GitHub.
+            if puzzle_url.split('?')[0] == 'pond-duck':
+                github_url = ('https://raw.githubusercontent.com/google/blockly-games/master/json/%s.json' %
+                        blockly_language_code.lower())
                 response_json = make_request(github_url).json()
                 title = response_json.get('Games.pond', 'Pond')
 
-            puzzles.append((title, thumbnail, puzzle_href))
+            puzzles.append((title, thumbnail, puzzle_url))
 
+        # Fetch puzzle descriptions
         driver.get('https://blockly-games.appspot.com/about?lang=%s' % blockly_language_code)
         for tr in driver.find_elements_by_css_selector('table tr'):
             descriptions.append(tr.text)
 
-    for (title, thumbnail, puzzle_href), description in zip(puzzles, descriptions):
-        print('Downloading puzzle "%s": %s from url https://blockly-games.appspot.com/%s' % (title, description, puzzle_href))
-        topic_node.add_child(download_single(puzzle_href, title, description, thumbnail, le_language_code))
+    for (title, thumbnail, puzzle_url), description in zip(puzzles, descriptions):
+        print('    Downloading puzzle "%s": %s (from https://blockly-games.appspot.com/%s)' %
+                (title, description, puzzle_url))
+        topic_node.add_child(download_puzzle(
+                puzzle_url, title, description, thumbnail, le_language_code))
 
 
-def download_single(puzzle_url, title, description, thumbnail, le_language_code):
-    """Download the book at index i."""
-    """Extract a Ricecooker node given the HTML source and some metadata."""
+def download_puzzle(puzzle_url, title, description, thumbnail, le_language_code):
+    """Download a single puzzle and return an HTML5 app node."""
     with WebDriver("https://blockly-games.appspot.com/%s" % puzzle_url, delay=1000) as driver:
         doc = BeautifulSoup(driver.page_source, "html.parser")
 
-    # Create a temporary folder to download all the files for a book.
+    # Create a temporary folder to download all the files for a puzzle.
     destination = tempfile.mkdtemp()
 
-    # Download all the JS/CSS/images/audio/etc. we'll need to make a standalone
-    # app.
+    # Download all the JS/CSS/images/audio/etc we can get from scraping the
+    # page source.
     doc = download_static_assets(doc, destination)
 
-    # Download other files not picked up by the above generic assets fetching.
+    # Download other files not picked up by the above generic assets fetching,
+    # e.g. from GitHub.
+    puzzle_name = puzzle_url.split('?')[0]
+    download_additional_assets(destination, puzzle_name)
+
+    remove_node(doc, '#languageMenu')
+    remove_node(doc, '#title')
+
+    # Write out the HTML source.
+    with open(os.path.join(destination, "index.html"), "w") as f:
+        f.write(str(doc))
+
+    print("    Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
+        puzzle_url, title, thumbnail, destination))
+    #preview_in_browser(destination)
+
+    zip_path = create_predictable_zip(destination)
+    return nodes.HTML5AppNode(
+        source_id=puzzle_url,
+        title=truncate_metadata(title),
+        description=description,
+        license=licenses.PublicDomainLicense(copyright_holder='Google'),
+        thumbnail=thumbnail,
+        files=[files.HTMLZipFile(zip_path)],
+        language=le_language_code,
+    )
+
+
+def download_additional_assets(destination, puzzle_name):
     url = make_fully_qualified_url('/third-party/JS-Interpreter/compiled.js')
     download_file(url, os.path.join(destination, 'third-party/JS-Interpreter'),
             request_fn=make_request, filename='compiled.js')
 
-    # Download files from GitHub.
-    dir_name = puzzle_url.split('?')[0]
+    dir_name = puzzle_name
     if dir_name == 'pond-tutor' or dir_name == 'pond-duck':
         dir_name = 'pond'
 
@@ -209,45 +251,26 @@ def download_single(puzzle_url, title, description, thumbnail, le_language_code)
     download_assets_from_github('google/blockly', 'media',
             os.path.join(destination, 'third-party/blockly/media'))
 
-    remove_node(doc, '#languageMenu')
-    remove_node(doc, '#title')
 
-    # Write out the HTML source.
-    with open(os.path.join(destination, "index.html"), "w") as f:
-        f.write(str(doc))
-
-    print("Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
-        puzzle_url, title, thumbnail, destination))
-    #preview_in_browser(destination)
-
-    zip_path = create_predictable_zip(destination)
-    return nodes.HTML5AppNode(
-        source_id=puzzle_url,
-        title=truncate_metadata(title),
-        description=description,
-        license=licenses.PublicDomainLicense(copyright_holder='Google'),
-        thumbnail=thumbnail,
-        files=[files.HTMLZipFile(zip_path)],
-        language=le_language_code,
-    )
-
-
-github_url = 'https://api.github.com/repos/%s/contents/%s?ref=master%s'
 
 
 def download_assets_from_github(repo_name, repo_path, destination):
-    print('Downloading files from GitHub ...')
+    print('        Downloading files from GitHub repo %s/%s ...' % (
+        repo_name, repo_path))
+
     access_token_param = ''
     if _GITHUB_API_TOKEN:
         access_token_param = '&access_token=%s' % _GITHUB_API_TOKEN
 
-    url = github_url % (repo_name, repo_path, access_token_param)
+    url = 'https://api.github.com/repos/%s/contents/%s?ref=master%s' % (
+            repo_name, repo_path, access_token_param)
     response = make_request(url)
+
     for item in response.json():
         if item['type'] == 'file':
             filename = item['name']
             download_url = item['download_url']
-            print('Downloading %s' % download_url)
+            print('        Downloading %s' % download_url)
             download_file(download_url, destination, request_fn=make_request,
                     filename=filename)
 
@@ -287,18 +310,14 @@ def download_static_assets(doc, destination):
                 if not node_filter(node):
                     src = node[attr]
                     node[attr] = ''
-                    print('Skipping node with src ', src)
+                    print('        Skipping node with src ', src)
                     continue
 
             url = make_fully_qualified_url(node[attr])
 
             if is_blacklisted(url):
-                print('Skipping downloading blacklisted url', url)
+                print('        Skipping downloading blacklisted url', url)
                 node[attr] = ""
-                continue
-
-            if 'jquery.fancybox.pack.js' in url:
-                node[attr] = "static/jquery.fancybox.dummy.js"
                 continue
 
             if url_middleware:
@@ -307,7 +326,7 @@ def download_static_assets(doc, destination):
             filename = derive_filename(url)
             node[attr] = filename
 
-            print("Downloading", url, "to filename", filename)
+            print("        Downloading", url, "to filename", filename)
             download_file(url, destination, request_fn=make_request,
                     filename=filename, middleware_callbacks=content_middleware)
 
@@ -315,7 +334,7 @@ def download_static_assets(doc, destination):
         # Download all images referenced in JS files
         for img in IMAGES_IN_JS_RE.findall(content):
             url = make_fully_qualified_url('/images/%s' % img)
-            print("Downloading", url, "to filename", img)
+            print("        Downloading", url, "to filename", img)
             download_file(url, destination, subpath="images",
                     request_fn=make_request, filename=img)
 
@@ -325,11 +344,6 @@ def download_static_assets(doc, destination):
             .replace("localStorage", "_localStorage")
             .replace('document.cookie.split', '"".split')
             .replace('document.cookie', 'window._document_cookie'))
-
-    def css_url_middleware(url):
-        # Somehow the minified app CSS doesn't render images. Download the
-        # original.
-        return url.replace("app.min.css", "app.css")
 
     def css_node_filter(node):
         return "stylesheet" in node["rel"]
@@ -355,7 +369,7 @@ def download_static_assets(doc, destination):
 
     # Download all linked static assets.
     download_assets("img[src]", "src")  # Images
-    download_assets("link[href]", "href", url_middleware=css_url_middleware,
+    download_assets("link[href]", "href",
             content_middleware=css_content_middleware,
             node_filter=css_node_filter)  # CSS
     download_assets("script[src]", "src", content_middleware=js_middleware) # JS
@@ -436,5 +450,5 @@ if __name__ == '__main__':
     """
     This code will run when the sushi chef is called from the command line.
     """
-    chef = ThreeAsafeerChef()
+    chef = BlocklyGamesChef()
     chef.main()
