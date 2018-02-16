@@ -174,10 +174,12 @@ def download_puzzles_for_language(topic_node, blockly_language_code, le_language
         print('    Downloading puzzle "%s": %s (from https://blockly-games.appspot.com/%s)' %
                 (title, description, puzzle_url))
         topic_node.add_child(download_puzzle(
-                puzzle_url, title, description, thumbnail, le_language_code))
+                puzzle_url, title, description, thumbnail, le_language_code,
+                blockly_language_code))
 
 
-def download_puzzle(puzzle_url, title, description, thumbnail, le_language_code):
+def download_puzzle(puzzle_url, title, description, thumbnail,
+        le_language_code, blockly_language_code):
     """Download a single puzzle and return an HTML5 app node."""
     with WebDriver("https://blockly-games.appspot.com/%s" % puzzle_url, delay=1000) as driver:
         doc = BeautifulSoup(driver.page_source, "html.parser")
@@ -194,8 +196,20 @@ def download_puzzle(puzzle_url, title, description, thumbnail, le_language_code)
     puzzle_name = puzzle_url.split('?')[0]
     download_additional_assets(destination, puzzle_name)
 
+    # Make some modifications to the HTML source -- hide some elements.
     remove_node(doc, '#languageMenu')
     remove_node(doc, '#title')
+
+    # Copy over some of our own JS/CSS files and then add links to them in the
+    # page source.
+    copy_tree("static", os.path.join(destination, "static"))
+
+    chef_body_script = doc.new_tag("script", src="static/chef_end_of_body.js")
+    doc.select_one('body').append(chef_body_script)
+
+    chef_head_script = doc.new_tag("script")
+    chef_head_script.string = 'window["BlocklyGamesLang"] = "%s";' % blockly_language_code
+    doc.select_one('head').insert(0, chef_head_script)
 
     # Write out the HTML source.
     with open(os.path.join(destination, "index.html"), "w") as f:
@@ -250,8 +264,6 @@ def download_additional_assets(destination, puzzle_name):
     download_assets_from_github('google/blockly', 'media', destination)
     download_assets_from_github('google/blockly', 'media',
             os.path.join(destination, 'third-party/blockly/media'))
-
-
 
 
 def download_assets_from_github(repo_name, repo_path, destination):
@@ -384,13 +396,6 @@ def download_static_assets(doc, destination):
     for node in doc.select('script'):
         if not node.attrs.get('src'):
             node.string = js_middleware(node.get_text(), url='')
-
-    # Copy over some of our own JS/CSS files and then add links to them in the
-    # page source.
-    copy_tree("static", os.path.join(destination, "static"))
-    chef_body_script = doc.new_tag("script", src="static/chef_end_of_body.js")
-
-    doc.select_one('body').append(chef_body_script)
 
     return doc
 
