@@ -412,6 +412,14 @@ def derive_filename(url):
     return "%s.%s" % (uuid.uuid4().hex, os.path.basename(urlparse(url).path))
 
 
+class Dummy404ResponseObject(requests.Response):
+    def __init__(self, url):
+        super(Dummy404ResponseObject, self).__init__()
+        self._content = b""
+        self.status_code = 404
+        self.url = url
+
+
 def make_request(url, clear_cookies=True, timeout=60, *args, **kwargs):
     if clear_cookies:
         sess.cookies.clear()
