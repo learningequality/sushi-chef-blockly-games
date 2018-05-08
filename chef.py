@@ -29,6 +29,7 @@ from ricecooker.classes import nodes, files, licenses
 from ricecooker.utils.caching import CacheForeverHeuristic, FileCache, CacheControlAdapter, InvalidatingCacheControlAdapter
 from ricecooker.utils.browser import preview_in_browser
 from ricecooker.utils.html import download_file, WebDriver
+from ricecooker.utils.downloader import download_static_assets
 from ricecooker.utils.zip import create_predictable_zip
 import selenium.webdriver.support.ui as selenium_ui
 from distutils.dir_util import copy_tree
@@ -189,7 +190,8 @@ def download_puzzle(puzzle_url, title, description, thumbnail,
 
     # Download all the JS/CSS/images/audio/etc we can get from scraping the
     # page source.
-    doc = download_static_assets(doc, destination)
+    doc = download_static_assets(doc, destination, 'https://blockly-games.appspot.com',
+            request_fn=make_request, url_blacklist=['analytics.js'])
 
     # Download other files not picked up by the above generic assets fetching,
     # e.g. from GitHub.
@@ -217,7 +219,7 @@ def download_puzzle(puzzle_url, title, description, thumbnail,
 
     print("    Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
         puzzle_url, title, thumbnail, destination))
-    #preview_in_browser(destination)
+    preview_in_browser(destination)
 
     zip_path = create_predictable_zip(destination)
     return nodes.HTML5AppNode(
@@ -298,126 +300,6 @@ def truncate_metadata(data_string):
     if len(data_string) > MAX_CHARS:
         data_string = data_string[:190] + " ..."
     return data_string
-
-
-CSS_URL_RE = re.compile(r"url\(['\"]?(.*?)['\"]?\)")
-IMAGES_IN_JS_RE = re.compile(r"images/(.*?)['\")]")
-
-
-# TODO(davidhu): Much of this is copied from 3asafeer Sushi Chef and may be
-# re-useable for other HTML5 apps. Split this out into a chef util.
-def download_static_assets(doc, destination):
-    """Download all the static assets for a given book's HTML soup.
-
-    Will download JS, CSS, images, and audio clips.
-    """
-    # Helper function to download all assets for a given CSS selector.
-    def download_assets(selector, attr, url_middleware=None,
-            content_middleware=None, node_filter=None):
-        nodes = doc.select(selector)
-
-        for i, node in enumerate(nodes):
-
-            if node_filter:
-                if not node_filter(node):
-                    src = node[attr]
-                    node[attr] = ''
-                    print('        Skipping node with src ', src)
-                    continue
-
-            url = make_fully_qualified_url(node[attr])
-
-            if is_blacklisted(url):
-                print('        Skipping downloading blacklisted url', url)
-                node[attr] = ""
-                continue
-
-            if url_middleware:
-                url = url_middleware(url)
-
-            filename = derive_filename(url)
-            node[attr] = filename
-
-            print("        Downloading", url, "to filename", filename)
-            download_file(url, destination, request_fn=make_request,
-                    filename=filename, middleware_callbacks=content_middleware)
-
-    def js_middleware(content, url, **kwargs):
-        # Download all images referenced in JS files
-        for img in IMAGES_IN_JS_RE.findall(content):
-            url = make_fully_qualified_url('/images/%s' % img)
-            print("        Downloading", url, "to filename", img)
-            download_file(url, destination, subpath="images",
-                    request_fn=make_request, filename=img)
-
-        # Polyfill localStorage and document.cookie as iframes can't access
-        # them
-        return (content
-            .replace("localStorage", "_localStorage")
-            .replace('document.cookie.split', '"".split')
-            .replace('document.cookie', 'window._document_cookie'))
-
-    def css_node_filter(node):
-        return "stylesheet" in node["rel"]
-
-    def css_content_middleware(content, url, **kwargs):
-        file_dir = os.path.dirname(urlparse(url).path)
-
-        # Download linked fonts and images
-        def repl(match):
-            src = match.group(1)
-            if src.startswith('//localhost'):
-                return 'url()'
-            # Don't download data: files
-            if src.startswith('data:'):
-                return match.group(0)
-            src_url = make_fully_qualified_url(os.path.join(file_dir, src))
-            derived_filename = derive_filename(src_url)
-            download_file(src_url, destination, request_fn=make_request,
-                    filename=derived_filename)
-            return 'url("%s")' % derived_filename
-
-        return CSS_URL_RE.sub(repl, content)
-
-    # Download all linked static assets.
-    download_assets("img[src]", "src")  # Images
-    download_assets("link[href]", "href",
-            content_middleware=css_content_middleware,
-            node_filter=css_node_filter)  # CSS
-    download_assets("script[src]", "src", content_middleware=js_middleware) # JS
-    download_assets("source[src]", "src") # Audio
-    download_assets("source[srcset]", "srcset") # Audio
-
-    # ... and also run the middleware on CSS/JS embedded in the page source to
-    # get linked files.
-    for node in doc.select('style'):
-        node.string = css_content_middleware(node.get_text(), url='')
-
-    for node in doc.select('script'):
-        if not node.attrs.get('src'):
-            node.string = js_middleware(node.get_text(), url='')
-
-    return doc
-
-
-url_blacklist = [
-    'analytics.js',
-]
-
-def is_blacklisted(url):
-    return any((item in url) for item in url_blacklist)
-
-
-def derive_filename(url):
-    return "%s.%s" % (uuid.uuid4().hex, os.path.basename(urlparse(url).path))
-
-
-class Dummy404ResponseObject(requests.Response):
-    def __init__(self, url):
-        super(Dummy404ResponseObject, self).__init__()
-        self._content = b""
-        self.status_code = 404
-        self.url = url
 
 
 def make_request(url, clear_cookies=True, timeout=60, *args, **kwargs):
