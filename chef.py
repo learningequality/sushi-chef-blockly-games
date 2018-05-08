@@ -219,7 +219,7 @@ def download_puzzle(puzzle_url, title, description, thumbnail,
 
     print("    Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
         puzzle_url, title, thumbnail, destination))
-    #preview_in_browser(destination)
+    preview_in_browser(destination)
 
     zip_path = create_predictable_zip(destination)
     return nodes.HTML5AppNode(
@@ -300,14 +300,6 @@ def truncate_metadata(data_string):
     if len(data_string) > MAX_CHARS:
         data_string = data_string[:190] + " ..."
     return data_string
-
-
-class Dummy404ResponseObject(requests.Response):
-    def __init__(self, url):
-        super(Dummy404ResponseObject, self).__init__()
-        self._content = b""
-        self.status_code = 404
-        self.url = url
 
 
 def make_request(url, clear_cookies=True, timeout=60, *args, **kwargs):
