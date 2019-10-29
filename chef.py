@@ -114,7 +114,7 @@ def download_all_languages(channel):
             # There are some obscure languages that Blockly supports that we
             # don't yet know about in le-utils. Skip those for now.
             # TODO(davidhu): Add these language codes to le-utils
-            if le_language_code in ['hrx', 'pms', 'sco', 'be-tarask']:
+            if le_language_code in ['hrx', 'pms', 'sco', 'be-tarask', 'kab']:
                 continue
 
             # ... and sometimes we do know about the language but our language
@@ -219,7 +219,7 @@ def download_puzzle(puzzle_url, title, description, thumbnail,
 
     print("    Downloaded puzzle %s titled \"%s\" (thumbnail %s) to destination %s" % (
         puzzle_url, title, thumbnail, destination))
-    preview_in_browser(destination)
+    # preview_in_browser(destination)
 
     zip_path = create_predictable_zip(destination)
     return nodes.HTML5AppNode(
